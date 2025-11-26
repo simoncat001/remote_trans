@@ -23,6 +23,12 @@ import pandas as pd
 from watchdog.observers import Observer
 
 from backend_client import BackendUploadClient
+from config_loader import (
+    CredentialConfigError,
+    DEFAULT_CONFIG_PATH,
+    resolve_config_path,
+    load_credentials,
+)
 from transfer_utils import (
     DEFAULT_CONCURRENCY,
     DEFAULT_ENV,
@@ -405,8 +411,14 @@ def main():
         default=None,
         help="Backend base URL. 若未指定则根据 --env 选择预设地址。",
     )
-    ap.add_argument("--username", help="Backend login username (or set UPLOAD_USERNAME env variable).")
-    ap.add_argument("--password", help="Backend login password (or set UPLOAD_PASSWORD env variable).")
+    ap.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "Credential config JSON path (honors REMOTE_TRANS_CONFIG env var, "
+            f"defaults to {DEFAULT_CONFIG_PATH})."
+        ),
+    )
     ap.add_argument("--template-id", default=DEFAULT_TEMPLATE_ID, help="Template ID for web_submit payload.")
     ap.add_argument("--review-status", default=DEFAULT_REVIEW_STATUS, help="Review status to store with the submission.")
     args = ap.parse_args()
@@ -423,10 +435,11 @@ def main():
         )
         sys.exit(2)
 
-    username = args.username or os.environ.get("UPLOAD_USERNAME")
-    password = args.password or os.environ.get("UPLOAD_PASSWORD")
-    if not username or not password:
-        print("[ERROR] --username/--password or UPLOAD_USERNAME/UPLOAD_PASSWORD env vars must be provided", file=sys.stderr)
+    config_path = resolve_config_path(args.config)
+    try:
+        username, password = load_credentials(config_path)
+    except CredentialConfigError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(3)
 
     if args.base_url:
