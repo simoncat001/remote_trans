@@ -150,7 +150,6 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
 
     listing = collect_listing(dataset_dir)
     zip_path = create_zip(dataset_dir)
-    zip_uploaded = False
     try:
         zip_url = multipart_upload(
             str(zip_path),
@@ -162,12 +161,11 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
             part_size=PART_SIZE,
             concurrency=CONCURRENCY,
         )
-        zip_uploaded = True
     except Exception as exc:
         print(f"[ERROR] upload failed for {zip_path}: {exc}")
         return
     finally:
-        if zip_uploaded and zip_path.exists():
+        if zip_path.exists():
             try:
                 zip_path.unlink()
             except OSError:
