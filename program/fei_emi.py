@@ -18,6 +18,8 @@ environments.
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, Optional, Tuple
+import contextlib
+import logging
 import re
 import xml.etree.ElementTree as ET
 
@@ -156,7 +158,8 @@ class _HyperSpyBackend(_BaseBackend):  # pragma: no cover - requires optional de
         if _hs_api is None:  # Defensive check, should never hit.
             raise RuntimeError("HyperSpy is not available")
         super().__init__(path)
-        dataset = _hs_api.load(str(path), lazy=True, stack=False)
+        with _suppress_rosettasciio_metadata_warning():
+            dataset = _hs_api.load(str(path), lazy=True, stack=False)
         if isinstance(dataset, list):
             if not dataset:
                 raise EmiParseError(f"HyperSpy did not return any signals for {path}")
@@ -279,4 +282,30 @@ def _experimental_description_element(text: str, path: Path) -> Optional[ET.Elem
         return ET.fromstring(block)
     except ET.ParseError as exc:
         raise EmiParseError(f"Failed to parse ExperimentalDescription in {path}") from exc
+
+
+@contextlib.contextmanager
+def _suppress_rosettasciio_metadata_warning():  # pragma: no cover - logging only
+    """Filter RosettaSciIO's missing metadata warning for sibling ``.ser`` files.
+
+    RosettaSciIO logs a warning when an ``.emi`` file does not contain explicit
+    metadata for a matching ``.ser`` ("did not contain any metadata for ..."). In
+    our uploads that scenario is expected when the ``.ser`` shares the same
+    prefix as the ``.emi``; the header fallback is fine, so we silence just that
+    message without muting other warnings.
+    """
+
+    class _MetadataFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            message = record.getMessage()
+            return "did not contain any metadata for" not in message
+
+    logger = logging.getLogger("RosettaSciIO")
+    filt = _MetadataFilter()
+    logger.addFilter(filt)
+    try:
+        yield
+    finally:
+        logger.removeFilter(filt)
+
 
