@@ -20,6 +20,7 @@ os.environ.pop("HTTPS_PROXY", None)
 os.environ["NO_PROXY"] = "127.0.0.1,localhost,::1"
 
 from backend_client import BackendUploadClient
+from config_loader import CredentialConfigError, DEFAULT_CONFIG_PATH, load_credentials
 from metadata_cli import EXTRACTORS, Extractor
 from transfer_utils import (
     DEFAULT_CONCURRENCY,
@@ -150,7 +151,6 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
 
     listing = collect_listing(dataset_dir)
     zip_path = create_zip(dataset_dir)
-    zip_uploaded = False
     try:
         zip_url = multipart_upload(
             str(zip_path),
@@ -162,12 +162,11 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
             part_size=PART_SIZE,
             concurrency=CONCURRENCY,
         )
-        zip_uploaded = True
     except Exception as exc:
         print(f"[ERROR] upload failed for {zip_path}: {exc}")
         return
     finally:
-        if zip_uploaded and zip_path.exists():
+        if zip_path.exists():
             try:
                 zip_path.unlink()
             except OSError:
@@ -219,8 +218,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poll-interval", type=int, default=POLL_INTERVAL, help="Polling interval for stability checks")
     parser.add_argument("--env", choices=sorted(ENV_BASE_URLS.keys()), default=DEFAULT_ENV, help="Backend environment preset")
     parser.add_argument("--base-url", help="Override backend base URL")
-    parser.add_argument("--username", help="Backend login username (or set UPLOAD_USERNAME env var)")
-    parser.add_argument("--password", help="Backend login password (or set UPLOAD_PASSWORD env var)")
+    parser.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="Credential config JSON path (must include username/password)",
+    )
     parser.add_argument("--template-id", default=DEFAULT_TEMPLATE_ID, help="Template ID for web_submit payload")
     parser.add_argument("--review-status", default=DEFAULT_REVIEW_STATUS, help="Review status for submissions")
     parser.add_argument("--process-existing", action="store_true", help="Process existing first-level directories on startup")
@@ -236,10 +238,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not root.is_dir():
         parser.error(f"{root} is not a directory")
 
-    username = args.username or os.environ.get("UPLOAD_USERNAME")
-    password = args.password or os.environ.get("UPLOAD_PASSWORD")
-    if not username or not password:
-        parser.error("--username/--password or UPLOAD_USERNAME/UPLOAD_PASSWORD must be provided")
+    try:
+        username, password = load_credentials(args.config)
+    except CredentialConfigError as exc:
+        parser.error(str(exc))
 
     if args.base_url:
         base_url = args.base_url
