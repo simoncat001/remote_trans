@@ -3,7 +3,7 @@
 远程传输接口请求代码
 
 ## 监控上传命令速查
-先在 `program/config.json` 填好登录账号和密码（字段 `username` / `password`），脚本会默认读取该文件，不再从命令行传递凭据。使用 `program/metadata_transfer.py` 监听仪器数据目录、提取元数据并上传。如需自定义后端域名，可用 `--base-url` 覆盖；如果配置文件不在默认位置，可通过 `--config` 指定路径。
+先在 `program/config.json` 填好登录账号和密码（字段 `username` / `password`），脚本会默认读取该文件，不再从命令行传递凭据。使用 `program/metadata_transfer.py` 监听仪器数据目录、提取元数据并上传。如需自定义后端域名，可用 `--base-url` 覆盖；如果配置文件不在默认位置，可通过 `--config` 指定路径，或设置环境变量 `REMOTE_TRANS_CONFIG` 指向自定义的 JSON 文件。
 
 - **透射电镜（TEM）**
   ```bash
