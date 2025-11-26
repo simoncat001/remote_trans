@@ -26,8 +26,10 @@ from backend_client import BackendUploadClient
 from config_loader import (
     CredentialConfigError,
     DEFAULT_CONFIG_PATH,
-    resolve_config_path,
+    load_config,
     load_credentials,
+    load_template_id,
+    resolve_config_path,
 )
 from transfer_utils import (
     DEFAULT_CONCURRENCY,
@@ -45,6 +47,7 @@ OBJECT_PREFIX = DEFAULT_OBJECT_PREFIX  # MinIO 对象前缀
 PART_SIZE = DEFAULT_PART_SIZE
 CONCURRENCY = DEFAULT_CONCURRENCY
 DEFAULT_TEMPLATE_ID = "1bada3ae-630f-4924-a8c5-270aaf155d90"
+DEFAULT_TEMPLATE_IDS = {"nanoindenter": DEFAULT_TEMPLATE_ID}
 DEFAULT_REVIEW_STATUS = "unreviewed"
 
 # 目录监控稳定性阈值
@@ -419,7 +422,14 @@ def main():
             f"defaults to {DEFAULT_CONFIG_PATH})."
         ),
     )
-    ap.add_argument("--template-id", default=DEFAULT_TEMPLATE_ID, help="Template ID for web_submit payload.")
+    ap.add_argument(
+        "--template-id",
+        default=None,
+        help=(
+            "Template ID for web_submit payload; defaults to template_ids.nanoindenter in config.json "
+            "or built-in fallback"
+        ),
+    )
     ap.add_argument("--review-status", default=DEFAULT_REVIEW_STATUS, help="Review status to store with the submission.")
     args = ap.parse_args()
 
@@ -437,7 +447,8 @@ def main():
 
     config_path = resolve_config_path(args.config)
     try:
-        username, password = load_credentials(config_path)
+        config_data = load_config(config_path)
+        username, password = load_credentials(config_path, config_data=config_data)
     except CredentialConfigError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(3)
@@ -456,13 +467,17 @@ def main():
         print(f"[ERROR] login failed: {exc}", file=sys.stderr)
         sys.exit(4)
 
+    template_id = args.template_id or load_template_id(
+        "nanoindenter", DEFAULT_TEMPLATE_IDS["nanoindenter"], config_path, config_data=config_data
+    )
+
     part_upload_url = urljoin(client.base_url, "api/development_data/part_upload")
     web_submit_url = urljoin(client.base_url, "api/development_data/web_submit")
     ctx = UploadContext(
         client=client,
         part_upload_url=part_upload_url,
         web_submit_url=web_submit_url,
-        template_id=args.template_id,
+        template_id=template_id,
         review_status=args.review_status,
     )
 
