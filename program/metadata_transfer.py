@@ -94,12 +94,46 @@ def slugify(name: str) -> str:
     return safe or "dataset"
 
 
-def collect_listing(dataset_dir: Path, *, skip: Iterable[Path] = ()) -> List[str]:
+def resolve_payload_root(dataset_dir: Path) -> tuple[Path, bool]:
+    preferred = dataset_dir / "Format_file"
+    if preferred.is_dir():
+        return preferred, True
+    return dataset_dir, False
+
+
+def _list_files(dataset_dir: Path, *, walk_root: Optional[Path] = None) -> tuple[List[Path], int]:
+    walk_root = walk_root or dataset_dir
+    files: List[Path] = []
+    skipped_symlinks = 0
+    for root, dirnames, filenames in os.walk(walk_root):
+        root_path = Path(root)
+        # 避免符号链接目录导致递归膨胀或循环
+        pruned: List[str] = []
+        for d in dirnames:
+            if (root_path / d).is_symlink():
+                skipped_symlinks += 1
+            else:
+                pruned.append(d)
+        dirnames[:] = pruned
+
+        for name in filenames:
+            path = root_path / name
+            if path.is_symlink():
+                skipped_symlinks += 1
+                continue
+            files.append(path)
+    return sorted(files), skipped_symlinks
+
+
+def collect_listing(
+    dataset_dir: Path, *, walk_root: Optional[Path] = None, skip: Iterable[Path] = ()
+) -> List[str]:
     skip_resolved = {p.resolve() for p in skip}
     listing: List[str] = []
-    for path in sorted(dataset_dir.rglob("*")):
-        if not path.is_file():
-            continue
+    files, skipped_symlinks = _list_files(dataset_dir, walk_root=walk_root)
+    if skipped_symlinks:
+        print(f"[ZIP] skip {skipped_symlinks} symlinked entries from listing")
+    for path in files:
         resolved = path.resolve()
         if resolved in skip_resolved:
             continue
@@ -107,17 +141,59 @@ def collect_listing(dataset_dir: Path, *, skip: Iterable[Path] = ()) -> List[str
     return listing
 
 
-def create_zip(dataset_dir: Path) -> Path:
+def _human_size(num: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(num)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{num}B"
+
+
+def create_zip(dataset_dir: Path, *, walk_root: Optional[Path] = None) -> Path:
     zip_name = f"{slugify(dataset_dir.name)}_raw_files.zip"
     zip_path = dataset_dir / zip_name
     if zip_path.exists():
         zip_path.unlink()
+
+    # 预先扫描一次，便于输出文件数和总大小，方便判断卡顿是否来自超大文件或文件过多
+    files, skipped_symlinks = _list_files(dataset_dir, walk_root=walk_root)
+    total_bytes = 0
+    for file_path in files:
+        try:
+            total_bytes += file_path.stat().st_size
+        except OSError:
+            # 即便 stat 失败也继续尝试压缩，其它错误会在写入时暴露
+            pass
+
+    print(
+        f"[ZIP] start {zip_path.name}: {len(files)} files, total ~{_human_size(total_bytes)}"
+    )
+    if skipped_symlinks:
+        print(f"[ZIP] skip {skipped_symlinks} symlinked entries")
+
+    added = 0
+    last_report = time.time()
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(dataset_dir.rglob("*")):
-            if not file_path.is_file():
-                continue
+        for file_path in files:
             arcname = file_path.relative_to(dataset_dir).as_posix()
-            zf.write(file_path, arcname)
+            try:
+                zf.write(file_path, arcname)
+                added += 1
+            except Exception as exc:  # pragma: no cover - IO driven
+                print(f"[ZIP_ERR] {arcname}: {exc}")
+                raise
+
+            # 避免看起来“卡住”，按时间节奏打印进度
+            now = time.time()
+            if now - last_report >= 5:
+                print(f"[ZIP] {added}/{len(files)} files... ({arcname})")
+                last_report = now
+
+    print(
+        f"[ZIP] done {zip_path.name}: {added} files, {_human_size(zip_path.stat().st_size)}"
+    )
     return zip_path
 
 
@@ -148,14 +224,18 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
     dataset_dir = Path(dir_path)
     print(f"[READY] {dataset_dir}")
 
+    payload_root, trimmed = resolve_payload_root(dataset_dir)
+    if trimmed:
+        print(f"[ZIP] only compressing {payload_root.name} under {dataset_dir}")
+
     try:
         metadata = run_metadata(workflow.extractor, dataset_dir)
     except Exception as exc:
         print(f"[ERROR] metadata extraction failed for {dataset_dir}: {exc}")
         return
 
-    listing = collect_listing(dataset_dir)
-    zip_path = create_zip(dataset_dir)
+    listing = collect_listing(dataset_dir, walk_root=payload_root)
+    zip_path = create_zip(dataset_dir, walk_root=payload_root)
     try:
         zip_url = multipart_upload(
             str(zip_path),
