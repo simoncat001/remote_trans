@@ -23,7 +23,12 @@ import pandas as pd
 from watchdog.observers import Observer
 
 from backend_client import BackendUploadClient
-from config_loader import CredentialConfigError, DEFAULT_CONFIG_PATH, load_credentials
+from config_loader import (
+    CredentialConfigError,
+    DEFAULT_CONFIG_PATH,
+    resolve_config_path,
+    load_credentials,
+)
 from transfer_utils import (
     DEFAULT_CONCURRENCY,
     DEFAULT_ENV,
@@ -408,8 +413,11 @@ def main():
     )
     ap.add_argument(
         "--config",
-        default=str(DEFAULT_CONFIG_PATH),
-        help="Credential config JSON path (must include username/password).",
+        default=None,
+        help=(
+            "Credential config JSON path (honors REMOTE_TRANS_CONFIG env var, "
+            f"defaults to {DEFAULT_CONFIG_PATH})."
+        ),
     )
     ap.add_argument("--template-id", default=DEFAULT_TEMPLATE_ID, help="Template ID for web_submit payload.")
     ap.add_argument("--review-status", default=DEFAULT_REVIEW_STATUS, help="Review status to store with the submission.")
@@ -427,8 +435,9 @@ def main():
         )
         sys.exit(2)
 
+    config_path = resolve_config_path(args.config)
     try:
-        username, password = load_credentials(args.config)
+        username, password = load_credentials(config_path)
     except CredentialConfigError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(3)
