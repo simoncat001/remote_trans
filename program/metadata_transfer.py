@@ -51,6 +51,7 @@ DEFAULT_REVIEW_STATUS = "unreviewed"
 QUIET_SECS = 20
 POLL_INTERVAL = 3
 SUPPORTED_TYPES = ("tem", "sem", "xrf", "xrd", "synchrotron")
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 @dataclass(frozen=True)
