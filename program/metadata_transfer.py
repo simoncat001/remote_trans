@@ -23,8 +23,10 @@ from backend_client import BackendUploadClient
 from config_loader import (
     CredentialConfigError,
     DEFAULT_CONFIG_PATH,
-    resolve_config_path,
+    load_config,
     load_credentials,
+    load_template_id,
+    resolve_config_path,
 )
 from metadata_cli import EXTRACTORS, Extractor
 from transfer_utils import (
@@ -44,6 +46,7 @@ OBJECT_PREFIX = DEFAULT_OBJECT_PREFIX
 PART_SIZE = DEFAULT_PART_SIZE
 CONCURRENCY = DEFAULT_CONCURRENCY
 DEFAULT_TEMPLATE_ID = "1bada3ae-630f-4924-a8c5-270aaf155d90"
+DEFAULT_TEMPLATE_IDS = {"tem": "40884413-9949-4590-88b3-735a63b6e8f7"}
 DEFAULT_REVIEW_STATUS = "unreviewed"
 QUIET_SECS = 20
 POLL_INTERVAL = 3
@@ -216,7 +219,10 @@ def update_raw_file_section(
 
 
 def run_metadata(extractor: Extractor, dataset_dir: Path) -> Dict[str, object]:
-    template_path = extractor.default_template()
+    if extractor.key == "tem":
+        template_path = Path(__file__).resolve().parent / "templates" / "TEM" / "透射电子显微表征元数据规范-2025.json"
+    else:
+        template_path = extractor.default_template()
     return extractor.runner(dataset_dir, template_path, None)
 
 
@@ -311,7 +317,14 @@ def build_parser() -> argparse.ArgumentParser:
             f"defaults to {DEFAULT_CONFIG_PATH})"
         ),
     )
-    parser.add_argument("--template-id", default=DEFAULT_TEMPLATE_ID, help="Template ID for web_submit payload")
+    parser.add_argument(
+        "--template-id",
+        default=None,
+        help=(
+            "Template ID for web_submit payload; defaults to template_ids.<type> in config.json "
+            "or built-in fallbacks"
+        ),
+    )
     parser.add_argument("--review-status", default=DEFAULT_REVIEW_STATUS, help="Review status for submissions")
     parser.add_argument("--process-existing", action="store_true", help="Process existing first-level directories on startup")
     return parser
@@ -328,7 +341,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     config_path = resolve_config_path(args.config)
     try:
-        username, password = load_credentials(config_path)
+        config_data = load_config(config_path)
+        username, password = load_credentials(config_path, config_data=config_data)
     except CredentialConfigError as exc:
         parser.error(str(exc))
 
@@ -346,11 +360,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         parser.error(f"login failed: {exc}")
 
+    default_template_id = DEFAULT_TEMPLATE_IDS.get(args.type, DEFAULT_TEMPLATE_ID)
+    template_id = args.template_id or load_template_id(
+        args.type, default_template_id, config_path, config_data=config_data
+    )
+
     ctx = UploadContext(
         client=client,
         part_upload_url=urljoin(client.base_url, "api/development_data/part_upload"),
         web_submit_url=urljoin(client.base_url, "api/development_data/web_submit"),
-        template_id=args.template_id,
+        template_id=template_id,
         review_status=args.review_status,
     )
 

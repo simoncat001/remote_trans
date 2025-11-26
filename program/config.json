@@ -1,4 +1,8 @@
 {
-  "username": "wanghong",
-  "password": "123456"
+  "username": "<fill-your-username>",
+  "password": "<fill-your-password>",
+  "template_ids": {
+    "tem": "40884413-9949-4590-88b3-735a63b6e8f7",
+    "nanoindenter": "1bada3ae-630f-4924-a8c5-270aaf155d90"
+  }
 }
