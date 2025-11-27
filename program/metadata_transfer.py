@@ -257,7 +257,7 @@ def run_metadata(extractor: Extractor, dataset_dir: Path) -> Dict[str, object]:
     if extractor.key == "tem":
         template_path = f"{TEMPLATES_DIR}/TEM/透射电子显微表征元数据规范-2025.json"
     elif extractor.key == "synchrotron":
-        template_path = f"{TEMPLATES_DIR}/synchrotron_radiation/同步辐射表征元数据规范-2025.json"
+        template_path = f"{TEMPLATES_DIR}/synchrotron_radiation/同步辐射白光X射线衍射表征元数据规范 -2025.json"
     else:
         template_path = extractor.default_template()
     return extractor.runner(dataset_dir, template_path, None)

@@ -65,7 +65,7 @@
     --env prod \
     --process-existing
   ```
-  - 默认模板：`templates/synchrotron_radiation/同步辐射表征元数据规范-2025.json`，默认模板 ID `969a567c-7e9b-47d9-8157-c4670a282234`（可在 `config/config.json` 的 `template_ids.synchrotron` 覆盖）。
+  - 默认模板：`templates/synchrotron_radiation/同步辐射白光X射线衍射表征元数据规范 -2025.json`，默认模板 ID `969a567c-7e9b-47d9-8157-c4670a282234`（可在 `config/config.json` 的 `template_ids.synchrotron` 覆盖）。
 
 参数说明：
 - `--root` 监听的一级子目录根路径；每个子目录代表一个待上传数据集。
