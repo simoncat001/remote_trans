@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "config.json"
 ENV_CONFIG_PATH = "REMOTE_TRANS_CONFIG"
 
 
