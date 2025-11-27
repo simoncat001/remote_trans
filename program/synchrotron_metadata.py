@@ -164,6 +164,12 @@ RAW_ALIASES: Dict[str, Tuple[str, str]] = {
     "detector type": ("detector", "model"),
     "_diffrn_detector.type": ("detector", "model"),
     "_diffrn_detector.model": ("detector", "model"),
+    "detector serial": ("detector", "serial"),
+    "detector serial number": ("detector", "serial"),
+    "探测器系列编号": ("detector", "serial"),
+    "像素尺寸": ("detector", "pixel_size_mm"),
+    "pixel size": ("detector", "pixel_size_mm"),
+    "pixel": ("detector", "pixel_size_mm"),
     "detector distance": ("detector", "distance_mm"),
     "detector_distance": ("detector", "distance_mm"),
     "detector-distance": ("detector", "distance_mm"),
@@ -267,6 +273,7 @@ NUMERIC_FIELDS = {
     ("beamline", "storage_ring_current_mA"),
     ("beamline", "exit_slit_um"),
     ("detector", "distance_mm"),
+    ("detector", "pixel_size_mm"),
     ("sample", "temperature_K"),
     ("scan", "points"),
     ("scan", "dwell_time_s"),
@@ -285,10 +292,12 @@ TEMPLATE_FIELD_ALIASES = {
     "实验团队": ("experiment", "team"),
     "实验地点": ("experiment", "location"),
     "实验备注": ("experiment", "notes"),
+    "测试日期": ("experiment", "start_time"),
     "实验日期": ("experiment", "start_time"),
     "MGID自定义部分": ("experiment", "mgid_custom"),
     "MGID": ("experiment", "mgid_custom"),
     "备注": ("scan", "comments"),
+    "样品名称": ("sample", "name"),
     "关联样品MGID": ("sample", "mgid_list"),
 }
 
@@ -300,6 +309,10 @@ TEMPLATE_SECTION_FIELD_ALIASES = {
     ("光束参数", "储存环电流(mA)"): ("beamline", "storage_ring_current_mA"),
     ("光束参数", "单色器"): ("beamline", "monochromator"),
     ("光束参数", "出射狭缝宽度(μm)"): ("beamline", "exit_slit_um"),
+    ("探测器", "探测器类型"): ("detector", "type"),
+    ("探测器", "探测器型号"): ("detector", "model"),
+    ("探测器", "探测器系列编号"): ("detector", "serial"),
+    ("探测器", "探测器像素尺寸"): ("detector", "pixel_size_mm"),
     ("探测系统", "探测器名称"): ("detector", "name"),
     ("探测系统", "探测器型号"): ("detector", "model"),
     ("探测系统", "样品到探测器距离(mm)"): ("detector", "distance_mm"),
@@ -608,6 +621,25 @@ def _cbf_wavelength_to_energy(raw_value: str) -> str | None:
     return f"{int(energy)} eV" if energy.is_integer() else f"{energy:.3f} eV"
 
 
+def _cbf_pixel_to_mm(raw_value: str) -> str | None:
+    numbers = re.findall(r"([\d.]+)\s*(mm|m|um|µm)?", raw_value, flags=re.IGNORECASE)
+    if not numbers:
+        return None
+    first_value, unit = numbers[0]
+    try:
+        numeric = float(first_value)
+    except ValueError:
+        return None
+    unit_lower = (unit or "").lower()
+    if unit_lower in {"m", ""}:
+        numeric *= 1000
+    elif unit_lower in {"um", "µm"}:
+        numeric /= 1000
+    if abs(numeric - round(numeric)) < 1e-6:
+        numeric = float(round(numeric))
+    return f"{int(numeric)}" if numeric.is_integer() else f"{numeric:.3f}"
+
+
 CBF_TRANSFORMS: Dict[str, Callable[[str], str | None]] = {
     "_diffrn_source.energy": _cbf_energy_to_electron_volts,
     "_diffrn_source.wavelength": _cbf_wavelength_to_energy,
@@ -617,6 +649,7 @@ CBF_TRANSFORMS: Dict[str, Callable[[str], str | None]] = {
     "wavelength": _cbf_wavelength_to_energy,
     "wavelength (a)": _cbf_wavelength_to_energy,
     "wavelength (angstrom)": _cbf_wavelength_to_energy,
+    "pixel_size": _cbf_pixel_to_mm,
 }
 
 
@@ -726,6 +759,12 @@ def _integrate_structured(metadata: MutableMapping[str, Dict[str, object]], data
         direct_alias = TEMPLATE_FIELD_ALIASES.get(section)
         if direct_alias:
             target_section, target_key = direct_alias
+            if (target_section, target_key) == ("sample", "mgid_list") and isinstance(
+                payload, (list, tuple)
+            ):
+                cleaned = [str(item).strip() for item in payload if str(item).strip()]
+                _merge_into(metadata, target_section, target_key, cleaned)
+                continue
             coerced = _coerce_value(target_section, target_key, str(payload), original_key=section)
             _merge_into(metadata, target_section, target_key, coerced)
             continue
@@ -764,6 +803,16 @@ def _handle_cbf_special(raw_key: str, value: str) -> List[Tuple[str, str, str]]:
                 ("scan", "_energy_end_eV", end_str),
                 ("scan", "energy_range_eV", range_str),
             ]
+    if normalized == "detector":
+        serial_match = re.search(r"s/n\s*([\w-]+)", value, flags=re.IGNORECASE)
+        entries: List[Tuple[str, str, str]] = []
+        if serial_match:
+            entries.append(("detector", "serial", serial_match.group(1)))
+        model = re.split(r",\s*s/n", value, flags=re.IGNORECASE)[0].strip()
+        if model:
+            entries.append(("detector", "model", model))
+            entries.append(("detector", "name", value))
+        return entries
     return []
 
 
@@ -1157,6 +1206,7 @@ def populate_template(
     _update(filled, "实验负责人", experiment.get("principal_investigator", ""))
     _update(filled, "实验团队", experiment.get("team", ""))
     _update(filled, "实验地点", experiment.get("location", ""))
+    _update(filled, "样品名称", sample.get("name", ""))
 
     mgid_custom = experiment.get("mgid_custom")
     if isinstance(mgid_custom, str):
@@ -1169,6 +1219,7 @@ def populate_template(
     start_time = _parse_datetime(str(experiment.get("start_time", ""))) if experiment else None
     if start_time is not None:
         _update(filled, "实验日期", start_time.date().isoformat())
+        _update(filled, "测试日期", start_time.date().isoformat())
     notes = experiment.get("notes", "")
     if notes:
         existing_note = str(filled.get("实验备注", "")).strip()
@@ -1193,6 +1244,14 @@ def populate_template(
     if detector.get("distance_mm") is not None:
         detector_section["样品到探测器距离(mm)"] = detector.get("distance_mm")
     filled["探测系统"] = detector_section
+
+    detector_details = dict(filled.get("探测器", {}))
+    _update(detector_details, "探测器类型", detector.get("type", ""))
+    _update(detector_details, "探测器型号", detector.get("model", ""))
+    _update(detector_details, "探测器系列编号", detector.get("serial", ""))
+    if detector.get("pixel_size_mm") is not None:
+        detector_details["探测器像素尺寸"] = detector.get("pixel_size_mm")
+    filled["探测器"] = detector_details
 
     sample_section = dict(filled.get("样品信息", {}))
     _update(sample_section, "样品名称", sample.get("name", ""))
