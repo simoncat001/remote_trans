@@ -3,6 +3,7 @@
   "password": "123456",
   "template_ids": {
     "tem": "40884413-9949-4590-88b3-735a63b6e8f7",
-    "nanoindenter": "1bada3ae-630f-4924-a8c5-270aaf155d90"
+    "nanoindenter": "1bada3ae-630f-4924-a8c5-270aaf155d90",
+    "xrf": "6b2b3020-2f09-47e5-9c1f-e8595ebd4423"
   }
 }
