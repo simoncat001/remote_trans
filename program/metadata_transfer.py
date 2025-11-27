@@ -322,7 +322,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--template-id",
         default=None,
         help=(
-            "Template ID for web_submit payload; defaults to template_ids.<type> in config.json "
+            "Template ID for web_submit payload; defaults to template_ids.<type> in the config file "
             "or built-in fallbacks"
         ),
     )
