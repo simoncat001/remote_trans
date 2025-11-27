@@ -1,0 +1,9 @@
+watchdog
+requests
+pandas
+pyyaml
+openpyxl
+xlrd
+hyperspy
+rosettasciio
+numba
