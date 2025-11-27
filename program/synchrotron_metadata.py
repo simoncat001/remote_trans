@@ -8,7 +8,7 @@ ship a ready-to-consume ``metadata.json``/``.yaml`` file, while others rely on
 plain-text records such as ``scan_info.txt`` or notebook exports.  This helper
 ingests as much information as it can find in a dataset directory—including
 the CIF headers embedded at the top of ``.cbf`` diffraction frames—maps the
-values onto the ``同步辐射表征元数据规范-2025.json`` template and prints a filled
+values onto the ``同步辐射白光X射线衍射表征元数据规范 -2025.json`` template and prints a filled
 JSON structure.  When structured metadata files are present they take
 precedence; otherwise the script falls back to heuristics that recognise
 common key/value phrases (both English and Chinese) and timestamps extracted
@@ -57,7 +57,7 @@ except Exception:  # pragma: no cover - optional dependency
     xlrd = None  # type: ignore
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_TEMPLATE = HERE.parent / "templates" / "synchrotron_radiation" / "同步辐射表征元数据规范-2025.json"
+DEFAULT_TEMPLATE = HERE.parent / "templates" / "synchrotron_radiation" / "同步辐射白光X射线衍射表征元数据规范 -2025.json"
 STRUCTURED_SUFFIXES = {".json", ".yaml", ".yml"}
 CBF_SUFFIXES = {".cbf"}
 TEXTUAL_SUFFIXES = {

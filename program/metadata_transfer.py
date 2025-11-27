@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -20,6 +21,14 @@ os.environ.pop("HTTPS_PROXY", None)
 os.environ["NO_PROXY"] = "127.0.0.1,localhost,::1"
 
 from backend_client import BackendUploadClient
+from config_loader import (
+    CredentialConfigError,
+    DEFAULT_CONFIG_PATH,
+    load_config,
+    load_credentials,
+    load_template_id,
+    resolve_config_path,
+)
 from metadata_cli import EXTRACTORS, Extractor
 from transfer_utils import (
     DEFAULT_CONCURRENCY,
@@ -38,10 +47,16 @@ OBJECT_PREFIX = DEFAULT_OBJECT_PREFIX
 PART_SIZE = DEFAULT_PART_SIZE
 CONCURRENCY = DEFAULT_CONCURRENCY
 DEFAULT_TEMPLATE_ID = "1bada3ae-630f-4924-a8c5-270aaf155d90"
+DEFAULT_TEMPLATE_IDS = {
+    "tem": "40884413-9949-4590-88b3-735a63b6e8f7",
+    "xrf": "6b2b3020-2f09-47e5-9c1f-e8595ebd4423",
+    "synchrotron": "969a567c-7e9b-47d9-8157-c4670a282234",
+}
 DEFAULT_REVIEW_STATUS = "unreviewed"
 QUIET_SECS = 20
 POLL_INTERVAL = 3
 SUPPORTED_TYPES = ("tem", "sem", "xrf", "xrd", "synchrotron")
+TEMPLATES_DIR = str(Path(__file__).resolve().parent.parent / "templates")
 
 
 @dataclass(frozen=True)
@@ -88,12 +103,46 @@ def slugify(name: str) -> str:
     return safe or "dataset"
 
 
-def collect_listing(dataset_dir: Path, *, skip: Iterable[Path] = ()) -> List[str]:
+def resolve_payload_root(dataset_dir: Path) -> tuple[Path, bool]:
+    preferred = dataset_dir / "Format_file"
+    if preferred.is_dir():
+        return preferred, True
+    return dataset_dir, False
+
+
+def _list_files(dataset_dir: Path, *, walk_root: Optional[Path] = None) -> tuple[List[Path], int]:
+    walk_root = walk_root or dataset_dir
+    files: List[Path] = []
+    skipped_symlinks = 0
+    for root, dirnames, filenames in os.walk(walk_root):
+        root_path = Path(root)
+        # 避免符号链接目录导致递归膨胀或循环
+        pruned: List[str] = []
+        for d in dirnames:
+            if (root_path / d).is_symlink():
+                skipped_symlinks += 1
+            else:
+                pruned.append(d)
+        dirnames[:] = pruned
+
+        for name in filenames:
+            path = root_path / name
+            if path.is_symlink():
+                skipped_symlinks += 1
+                continue
+            files.append(path)
+    return sorted(files), skipped_symlinks
+
+
+def collect_listing(
+    dataset_dir: Path, *, walk_root: Optional[Path] = None, skip: Iterable[Path] = ()
+) -> List[str]:
     skip_resolved = {p.resolve() for p in skip}
     listing: List[str] = []
-    for path in sorted(dataset_dir.rglob("*")):
-        if not path.is_file():
-            continue
+    files, skipped_symlinks = _list_files(dataset_dir, walk_root=walk_root)
+    if skipped_symlinks:
+        print(f"[ZIP] skip {skipped_symlinks} symlinked entries from listing")
+    for path in files:
         resolved = path.resolve()
         if resolved in skip_resolved:
             continue
@@ -101,18 +150,76 @@ def collect_listing(dataset_dir: Path, *, skip: Iterable[Path] = ()) -> List[str
     return listing
 
 
-def create_zip(dataset_dir: Path) -> Path:
+def _primary_from_metadata(metadata: Dict[str, object], config: RawFileConfig) -> Optional[str]:
+    """Pull the existing主要数据文件值（如果已经填入模板）供回退使用。"""
+
+    container = metadata.get(config.container_key)
+    if not isinstance(container, dict):
+        return None
+    value = container.get(config.file_key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _human_size(num: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(num)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{num}B"
+
+
+def create_zip(dataset_dir: Path, *, walk_root: Optional[Path] = None) -> Path:
     zip_name = f"{slugify(dataset_dir.name)}_raw_files.zip"
     zip_path = dataset_dir / zip_name
     if zip_path.exists():
         zip_path.unlink()
+
+    # 预先扫描一次，便于输出文件数和总大小，方便判断卡顿是否来自超大文件或文件过多
+    files, skipped_symlinks = _list_files(dataset_dir, walk_root=walk_root)
+    total_bytes = 0
+    for file_path in files:
+        try:
+            total_bytes += file_path.stat().st_size
+        except OSError:
+            # 即便 stat 失败也继续尝试压缩，其它错误会在写入时暴露
+            pass
+
+    print(
+        f"[ZIP] start {zip_path.name}: {len(files)} files, total ~{_human_size(total_bytes)}"
+    )
+    if skipped_symlinks:
+        print(f"[ZIP] skip {skipped_symlinks} symlinked entries")
+
+    added = 0
+    last_report = time.time()
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(dataset_dir.rglob("*")):
-            if not file_path.is_file():
-                continue
+        for file_path in files:
             arcname = file_path.relative_to(dataset_dir).as_posix()
-            zf.write(file_path, arcname)
+            try:
+                zf.write(file_path, arcname)
+                added += 1
+            except Exception as exc:  # pragma: no cover - IO driven
+                print(f"[ZIP_ERR] {arcname}: {exc}")
+                raise
+
+            # 避免看起来“卡住”，按时间节奏打印进度
+            now = time.time()
+            if now - last_report >= 5:
+                print(f"[ZIP] {added}/{len(files)} files... ({arcname})")
+                last_report = now
+
+    print(
+        f"[ZIP] done {zip_path.name}: {added} files, {_human_size(zip_path.stat().st_size)}"
+    )
     return zip_path
+
+
+def _with_file_prefix(url: str) -> str:
+    return url if url.startswith("file:") else f"file:{url}"
 
 
 def update_raw_file_section(
@@ -120,21 +227,39 @@ def update_raw_file_section(
     config: RawFileConfig,
     zip_url: str,
     listing: List[str],
+    *,
+    listing_url: Optional[str] = None,
 ) -> None:
     container = metadata.get(config.container_key)
     if not isinstance(container, dict):
         container = {}
-    container[config.file_key] = zip_url
+    container[config.file_key] = _with_file_prefix(zip_url)
     if config.listing_key:
-        if config.listing_is_list:
+        if listing_url:
+            container[config.listing_key] = _with_file_prefix(listing_url)
+        elif config.listing_is_list:
             container[config.listing_key] = listing
         else:
             container[config.listing_key] = "\n".join(listing)
     metadata[config.container_key] = container
 
 
+def _write_listing_csv(dataset_dir: Path, listing: List[str]) -> Path:
+    csv_path = dataset_dir / f"{slugify(dataset_dir.name)}_file_listing.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.writer(fp)
+        for entry in listing:
+            writer.writerow([entry])
+    return csv_path
+
+
 def run_metadata(extractor: Extractor, dataset_dir: Path) -> Dict[str, object]:
-    template_path = extractor.default_template()
+    if extractor.key == "tem":
+        template_path = f"{TEMPLATES_DIR}/TEM/透射电子显微表征元数据规范-2025.json"
+    elif extractor.key == "synchrotron":
+        template_path = f"{TEMPLATES_DIR}/synchrotron_radiation/同步辐射白光X射线衍射表征元数据规范 -2025.json"
+    else:
+        template_path = extractor.default_template()
     return extractor.runner(dataset_dir, template_path, None)
 
 
@@ -142,15 +267,22 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
     dataset_dir = Path(dir_path)
     print(f"[READY] {dataset_dir}")
 
+    payload_root, trimmed = resolve_payload_root(dataset_dir)
+    if trimmed:
+        print(f"[ZIP] only compressing {payload_root.name} under {dataset_dir}")
+
     try:
         metadata = run_metadata(workflow.extractor, dataset_dir)
     except Exception as exc:
         print(f"[ERROR] metadata extraction failed for {dataset_dir}: {exc}")
         return
 
-    listing = collect_listing(dataset_dir)
-    zip_path = create_zip(dataset_dir)
-    zip_uploaded = False
+    listing = collect_listing(dataset_dir, walk_root=payload_root)
+    if workflow.key == "xrf" and not listing:
+        fallback = _primary_from_metadata(metadata, workflow.raw_config)
+        if fallback:
+            listing = [fallback]
+    zip_path = create_zip(dataset_dir, walk_root=payload_root)
     try:
         zip_url = multipart_upload(
             str(zip_path),
@@ -162,18 +294,48 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
             part_size=PART_SIZE,
             concurrency=CONCURRENCY,
         )
-        zip_uploaded = True
     except Exception as exc:
         print(f"[ERROR] upload failed for {zip_path}: {exc}")
         return
     finally:
-        if zip_uploaded and zip_path.exists():
+        if zip_path.exists():
             try:
                 zip_path.unlink()
             except OSError:
                 pass
+    listing_url: Optional[str] = None
+    if workflow.raw_config.listing_key:
+        csv_path = _write_listing_csv(dataset_dir, listing)
+        try:
+            listing_url = multipart_upload(
+                str(csv_path),
+                "text/csv",
+                session=ctx.client.session,
+                headers=ctx.client.auth_headers(),
+                api=ctx.part_upload_url,
+                object_prefix=OBJECT_PREFIX,
+                part_size=PART_SIZE,
+                concurrency=CONCURRENCY,
+            )
+        except Exception as exc:
+            print(f"[ERROR] upload failed for {csv_path}: {exc}")
+        finally:
+            if csv_path.exists():
+                try:
+                    csv_path.unlink()
+                except OSError:
+                    pass
 
-    update_raw_file_section(metadata, workflow.raw_config, zip_url, listing)
+    update_raw_file_section(
+        metadata,
+        workflow.raw_config,
+        zip_url,
+        listing,
+        listing_url=listing_url,
+    )
+    print(
+        f"[RAW] {workflow.key}: zip -> {_with_file_prefix(zip_url)} with {len(listing)} files listed"
+    )
 
     payload = {
         "template_id": ctx.template_id,
@@ -219,9 +381,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poll-interval", type=int, default=POLL_INTERVAL, help="Polling interval for stability checks")
     parser.add_argument("--env", choices=sorted(ENV_BASE_URLS.keys()), default=DEFAULT_ENV, help="Backend environment preset")
     parser.add_argument("--base-url", help="Override backend base URL")
-    parser.add_argument("--username", help="Backend login username (or set UPLOAD_USERNAME env var)")
-    parser.add_argument("--password", help="Backend login password (or set UPLOAD_PASSWORD env var)")
-    parser.add_argument("--template-id", default=DEFAULT_TEMPLATE_ID, help="Template ID for web_submit payload")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "Credential config JSON path (honors REMOTE_TRANS_CONFIG env var, "
+            f"defaults to {DEFAULT_CONFIG_PATH})"
+        ),
+    )
+    parser.add_argument(
+        "--template-id",
+        default=None,
+        help=(
+            "Template ID for web_submit payload; defaults to template_ids.<type> in the config file "
+            "or built-in fallbacks"
+        ),
+    )
     parser.add_argument("--review-status", default=DEFAULT_REVIEW_STATUS, help="Review status for submissions")
     parser.add_argument("--process-existing", action="store_true", help="Process existing first-level directories on startup")
     return parser
@@ -236,10 +411,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not root.is_dir():
         parser.error(f"{root} is not a directory")
 
-    username = args.username or os.environ.get("UPLOAD_USERNAME")
-    password = args.password or os.environ.get("UPLOAD_PASSWORD")
-    if not username or not password:
-        parser.error("--username/--password or UPLOAD_USERNAME/UPLOAD_PASSWORD must be provided")
+    config_path = resolve_config_path(args.config)
+    try:
+        config_data = load_config(config_path)
+        username, password = load_credentials(config_path, config_data=config_data)
+    except CredentialConfigError as exc:
+        parser.error(str(exc))
 
     if args.base_url:
         base_url = args.base_url
@@ -255,11 +432,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         parser.error(f"login failed: {exc}")
 
+    default_template_id = DEFAULT_TEMPLATE_IDS.get(args.type, DEFAULT_TEMPLATE_ID)
+    template_id = args.template_id or load_template_id(
+        args.type, default_template_id, config_path, config_data=config_data
+    )
+
     ctx = UploadContext(
         client=client,
         part_upload_url=urljoin(client.base_url, "api/development_data/part_upload"),
         web_submit_url=urljoin(client.base_url, "api/development_data/web_submit"),
-        template_id=args.template_id,
+        template_id=template_id,
         review_status=args.review_status,
     )
 
