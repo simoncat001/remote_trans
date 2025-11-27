@@ -8,6 +8,7 @@ import argparse
 import datetime as _dt
 import json
 import re
+import zipfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Iterable, List, MutableMapping, Tuple
@@ -461,10 +462,7 @@ def _flatten_atlas_object(prefix: str, obj, *, output: MutableMapping[str, str])
     output[prefix] = "" if obj is None else str(obj)
 
 
-def parse_atlas_file(path: Path) -> Dict[str, str]:
-    """Parse an ``.atlas`` metadata file into a flat key/value map."""
-
-    text = path.read_text("utf-8", errors="ignore")
+def _parse_atlas_text(text: str) -> Dict[str, str]:
     values: Dict[str, str] = {}
     try:
         payload = json.loads(text)
@@ -485,6 +483,58 @@ def parse_atlas_file(path: Path) -> Dict[str, str]:
                     if key and val:
                         values.setdefault(key, val)
                     break
+    return values
+
+
+def _extract_text_from_zip(path: Path) -> str | None:
+    """Return the most relevant text payload from a zipped ``.atlas``."""
+
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = [n for n in zf.namelist() if not n.endswith("/")]
+            preferred_order = [
+                "metadata.json",
+                "atlas.json",
+                "info.json",
+                "config.json",
+                "metadata.txt",
+                "atlas.txt",
+                "info.txt",
+            ]
+            preferred = next((n for n in preferred_order if n in names), None)
+            if preferred is None:
+                preferred = next(
+                    (
+                        n
+                        for n in names
+                        if n.lower().endswith((".json", ".txt", ".ini"))
+                    ),
+                    None,
+                )
+            if preferred is None and names:
+                preferred = names[0]
+            if preferred is None:
+                return None
+            data = zf.read(preferred)
+            try:
+                return data.decode("utf-8")
+            except UnicodeDecodeError:
+                return data.decode("utf-8", errors="ignore")
+    except (zipfile.BadZipFile, FileNotFoundError):
+        return None
+
+
+def parse_atlas_file(path: Path) -> Dict[str, str]:
+    """Parse an ``.atlas`` metadata file into a flat key/value map."""
+
+    values: Dict[str, str] = {}
+    if zipfile.is_zipfile(path):
+        text = _extract_text_from_zip(path)
+        if text:
+            values = _parse_atlas_text(text)
+    if not values:
+        text = path.read_text("utf-8", errors="ignore")
+        values = _parse_atlas_text(text)
     return values
 
 
