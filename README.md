@@ -14,7 +14,8 @@
   "template_ids": {
     "tem": "40884413-9949-4590-88b3-735a63b6e8f7",
     "nanoindenter": "1bada3ae-630f-4924-a8c5-270aaf155d90",
-    "xrf": "6b2b3020-2f09-47e5-9c1f-e8595ebd4423"
+    "xrf": "6b2b3020-2f09-47e5-9c1f-e8595ebd4423",
+    "synchrotron": "969a567c-7e9b-47d9-8157-c4670a282234"
   }
 }
 ```
@@ -64,6 +65,7 @@
     --env prod \
     --process-existing
   ```
+  - 默认模板：`templates/synchrotron_radiation/同步辐射表征元数据规范-2025.json`，默认模板 ID `969a567c-7e9b-47d9-8157-c4670a282234`（可在 `config/config.json` 的 `template_ids.synchrotron` 覆盖）。
 
 参数说明：
 - `--root` 监听的一级子目录根路径；每个子目录代表一个待上传数据集。

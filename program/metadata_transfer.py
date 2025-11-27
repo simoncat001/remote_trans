@@ -50,6 +50,7 @@ DEFAULT_TEMPLATE_ID = "1bada3ae-630f-4924-a8c5-270aaf155d90"
 DEFAULT_TEMPLATE_IDS = {
     "tem": "40884413-9949-4590-88b3-735a63b6e8f7",
     "xrf": "6b2b3020-2f09-47e5-9c1f-e8595ebd4423",
+    "synchrotron": "969a567c-7e9b-47d9-8157-c4670a282234",
 }
 DEFAULT_REVIEW_STATUS = "unreviewed"
 QUIET_SECS = 20
@@ -255,6 +256,8 @@ def _write_listing_csv(dataset_dir: Path, listing: List[str]) -> Path:
 def run_metadata(extractor: Extractor, dataset_dir: Path) -> Dict[str, object]:
     if extractor.key == "tem":
         template_path = f"{TEMPLATES_DIR}/TEM/透射电子显微表征元数据规范-2025.json"
+    elif extractor.key == "synchrotron":
+        template_path = f"{TEMPLATES_DIR}/synchrotron_radiation/同步辐射表征元数据规范-2025.json"
     else:
         template_path = extractor.default_template()
     return extractor.runner(dataset_dir, template_path, None)
