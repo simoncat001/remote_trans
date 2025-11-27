@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Extract XRF metadata from ``.cbf`` files and populate the template."""
+"""Extract XRF metadata from ``.atlas`` files and populate the template."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Iterable, List, MutableMapping, Tuple
 
-from cbf_utils import normalise_key, parse_cbf_header, parse_numeric
+from cbf_utils import normalise_key, parse_numeric
 
 HERE = Path(__file__).resolve().parent
 TEMPLATES_DIR = str(HERE.parent / "templates")
@@ -449,10 +449,49 @@ def _coerce_value(key: str, raw: str):
         return raw.strip()
 
 
-def extract_metadata(cbf_path: Path) -> Dict[str, object]:
-    header = parse_cbf_header(cbf_path)
+def _flatten_atlas_object(prefix: str, obj, *, output: MutableMapping[str, str]) -> None:
+    if isinstance(obj, MutableMapping):
+        for key, value in obj.items():
+            key_str = f"{prefix}.{key}" if prefix else str(key)
+            _flatten_atlas_object(key_str, value, output=output)
+        return
+    if isinstance(obj, list):
+        output[prefix] = ", ".join(str(item) for item in obj)
+        return
+    output[prefix] = "" if obj is None else str(obj)
+
+
+def parse_atlas_file(path: Path) -> Dict[str, str]:
+    """Parse an ``.atlas`` metadata file into a flat key/value map."""
+
+    text = path.read_text("utf-8", errors="ignore")
+    values: Dict[str, str] = {}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, MutableMapping):
+        _flatten_atlas_object("", payload, output=values)
+    if not values:
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            for separator in (":", "=", "\t"):
+                if separator in line:
+                    key, val = line.split(separator, 1)
+                    key = key.strip()
+                    val = val.strip()
+                    if key and val:
+                        values.setdefault(key, val)
+                    break
+    return values
+
+
+def extract_metadata(atlas_path: Path) -> Dict[str, object]:
+    header = parse_atlas_file(atlas_path)
     metadata: Dict[str, object] = {}
-    items = [(normalise_key(k), v) for k, v in header.items()]
+    items = [(normalise_key(k.replace(".", " ")), v) for k, v in header.items()]
     for normalised, value in items:
         canonical = HEADER_ALIASES.get(normalised)
         if not canonical:
@@ -498,7 +537,7 @@ def build_output(
     template: Dict[str, object],
     metadata: Dict[str, object],
     dataset_root: Path,
-    primary_cbf: Path,
+    primary_atlas: Path,
     *,
     raw_listing: List[str],
 ) -> Dict[str, object]:
@@ -506,7 +545,7 @@ def build_output(
     default_name = dataset_root.name
     metadata.setdefault("experiment_name", metadata.get("sample_name", default_name))
     metadata.setdefault("sample_name", default_name)
-    metadata.setdefault("raw_primary", primary_cbf.relative_to(dataset_root).as_posix())
+    metadata.setdefault("raw_primary", primary_atlas.relative_to(dataset_root).as_posix())
     metadata.setdefault("raw_listing", raw_listing)
     for key, value in metadata.items():
         path = FIELD_PATH_MAP.get(key)
@@ -518,13 +557,12 @@ def build_output(
 
 def locate_dataset(target: Path) -> Tuple[Path, Path]:
     if target.is_dir():
-        cbf_files = sorted(target.rglob("*.cbf"))
-        if not cbf_files:
-            raise FileNotFoundError(f"No .cbf files found under {target}")
-        primary = next((p for p in cbf_files if "master" in p.name.lower()), cbf_files[0])
-        return target, primary
-    if target.suffix.lower() != ".cbf":
-        raise ValueError("Provide a directory or a .cbf file")
+        atlas_files = sorted(target.rglob("*.atlas"))
+        if not atlas_files:
+            raise FileNotFoundError(f"No .atlas files found under {target}")
+        return target, atlas_files[0]
+    if target.suffix.lower() != ".atlas":
+        raise ValueError("Provide a directory or a .atlas file")
     return target.parent, target
 
 
@@ -567,9 +605,9 @@ def generate_metadata(
 
 def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Populate the XRF template using metadata parsed from .cbf files."
+        description="Populate the XRF template using metadata parsed from .atlas files."
     )
-    parser.add_argument("path", help="Dataset directory or .cbf file")
+    parser.add_argument("path", help="Dataset directory or .atlas file")
     parser.add_argument(
         "--template",
         help="Optional template JSON path. Defaults to the first JSON in templates/XRF",
