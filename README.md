@@ -45,6 +45,7 @@
     --env prod \
     --process-existing
   ```
+  - 元数据默认从数据目录中的 `.atlas` 文件解析，脚本会自动挑选首个 `.atlas` 作为主文件。
 
 - **X 射线衍射（XRD）**
   ```bash
