@@ -10,6 +10,7 @@ import json
 import re
 import zipfile
 from copy import deepcopy
+from configparser import ConfigParser
 from pathlib import Path
 from typing import Dict, Iterable, List, MutableMapping, Tuple
 
@@ -42,6 +43,11 @@ HEADER_ALIASES: Dict[str, str] = {
     "sample code": "sample_id",
     "sample description": "sample_description",
     "comment sample": "sample_description",
+    "sample prep": "sample_preparation",
+    "sample preparation": "sample_preparation",
+    "sample preparation method": "sample_preparation",
+    "preparation": "sample_preparation",
+    "prep": "sample_preparation",
     "operator": "operator",
     "user": "operator",
     "collected by": "operator",
@@ -101,6 +107,7 @@ HEADER_ALIASES: Dict[str, str] = {
     "source target": "source_target",
     "target": "source_target",
     "靶材": "source_target",
+    "target material": "source_target",
     "tube voltage": "beam_voltage",
     "accelerating voltage": "beam_voltage",
     "beam voltage": "beam_voltage",
@@ -183,6 +190,7 @@ FIELD_PATH_MAP: Dict[str, Tuple[str, ...]] = {
     "experiment_name": ("实验名称",),
     "sample_name": ("样品名称",),
     "sample_id": ("样品编号",),
+    "sample_preparation": ("样品制备方法",),
     "sample_description": ("样品描述",),
     "sample_mgid": ("关联样品MGID",),
     "operator": ("测试人员",),
@@ -486,6 +494,22 @@ def _parse_atlas_text(text: str) -> Dict[str, str]:
     return values
 
 
+def _parse_ini_text(text: str) -> Dict[str, str]:
+    parser = ConfigParser()
+    output: Dict[str, str] = {}
+    try:
+        parser.read_string(text)
+    except Exception:
+        return output
+    for key, value in parser.defaults().items():
+        output.setdefault(key, value)
+    for section in parser.sections():
+        for key, value in parser.items(section):
+            name = f"{section}.{key}" if section.upper() != "DEFAULT" else key
+            output.setdefault(name, value)
+    return output
+
+
 def _extract_text_from_zip(path: Path) -> str | None:
     """Return the most relevant text payload from a zipped ``.atlas``."""
 
@@ -538,9 +562,7 @@ def parse_atlas_file(path: Path) -> Dict[str, str]:
     return values
 
 
-def extract_metadata(atlas_path: Path) -> Dict[str, object]:
-    header = parse_atlas_file(atlas_path)
-    metadata: Dict[str, object] = {}
+def _ingest_header_map(metadata: Dict[str, object], header: Dict[str, str]) -> None:
     items = [(normalise_key(k.replace(".", " ")), v) for k, v in header.items()]
     for normalised, value in items:
         canonical = HEADER_ALIASES.get(normalised)
@@ -558,6 +580,12 @@ def extract_metadata(atlas_path: Path) -> Dict[str, object]:
                     metadata["scan_start_energy"], metadata["scan_end_energy"] = parsed
         if "step" in normalised and "energy" in normalised and "scan_step" not in metadata:
             metadata["scan_step"] = _coerce_value("scan_step", value)
+
+
+def extract_metadata(atlas_path: Path) -> Dict[str, object]:
+    header = parse_atlas_file(atlas_path)
+    metadata: Dict[str, object] = {}
+    _ingest_header_map(metadata, header)
     return metadata
 
 
@@ -606,14 +634,43 @@ def build_output(
 
 
 def locate_dataset(target: Path) -> Tuple[Path, Path]:
+    """Return the dataset root and the most recent ``.atlas`` file."""
+
+    def _pick_latest(candidates: List[Path]) -> Path:
+        try:
+            return max(candidates, key=lambda p: p.stat().st_mtime)
+        except Exception:
+            # 回退到名称排序，避免 Windows 时间戳/权限问题导致崩溃
+            return sorted(candidates)[-1]
+
     if target.is_dir():
         atlas_files = sorted(target.rglob("*.atlas"))
         if not atlas_files:
             raise FileNotFoundError(f"No .atlas files found under {target}")
-        return target, atlas_files[0]
+        return target, _pick_latest(atlas_files)
     if target.suffix.lower() != ".atlas":
         raise ValueError("Provide a directory or a .atlas file")
     return target.parent, target
+
+
+def _iter_auxiliary_files(dataset_root: Path) -> Iterable[Path]:
+    names = {"Thumbs.db", "desktop.ini"}
+    for path in dataset_root.rglob("*"):
+        if path.name in names and path.is_file():
+            yield path
+
+
+def _collect_auxiliary_metadata(dataset_root: Path) -> Dict[str, str]:
+    aggregated: Dict[str, str] = {}
+    for candidate in _iter_auxiliary_files(dataset_root):
+        text = candidate.read_text("utf-8", errors="ignore")
+        ini_values = _parse_ini_text(text)
+        for key, value in ini_values.items():
+            aggregated.setdefault(key, value)
+        text_values = _parse_atlas_text(text)
+        for key, value in text_values.items():
+            aggregated.setdefault(key, value)
+    return aggregated
 
 
 def build_listing(dataset_root: Path, *, skip: Iterable[Path] = ()) -> List[str]:
@@ -648,6 +705,9 @@ def generate_metadata(
 
     raw_listing = build_listing(dataset_root, skip=skip_paths)
     metadata = extract_metadata(primary)
+    aux_metadata = _collect_auxiliary_metadata(dataset_root)
+    if aux_metadata:
+        _ingest_header_map(metadata, aux_metadata)
     template_file = _resolve_template(template_path)
     template = json.loads(template_file.read_text("utf-8"))
     return build_output(template, metadata, dataset_root, primary, raw_listing=raw_listing)

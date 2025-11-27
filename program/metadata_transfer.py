@@ -148,6 +148,18 @@ def collect_listing(
     return listing
 
 
+def _primary_from_metadata(metadata: Dict[str, object], config: RawFileConfig) -> Optional[str]:
+    """Pull the existing主要数据文件值（如果已经填入模板）供回退使用。"""
+
+    container = metadata.get(config.container_key)
+    if not isinstance(container, dict):
+        return None
+    value = container.get(config.file_key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def _human_size(num: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     size = float(num)
@@ -245,6 +257,10 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
         return
 
     listing = collect_listing(dataset_dir, walk_root=payload_root)
+    if workflow.key == "xrf" and not listing:
+        fallback = _primary_from_metadata(metadata, workflow.raw_config)
+        if fallback:
+            listing = [fallback]
     zip_path = create_zip(dataset_dir, walk_root=payload_root)
     try:
         zip_url = multipart_upload(
@@ -268,6 +284,9 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
                 pass
 
     update_raw_file_section(metadata, workflow.raw_config, zip_url, listing)
+    print(
+        f"[RAW] {workflow.key}: zip -> {zip_url} with {len(listing)} files listed"
+    )
 
     payload = {
         "template_id": ctx.template_id,
