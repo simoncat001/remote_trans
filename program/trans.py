@@ -426,7 +426,7 @@ def main():
         "--template-id",
         default=None,
         help=(
-            "Template ID for web_submit payload; defaults to template_ids.nanoindenter in config.json "
+            "Template ID for web_submit payload; defaults to template_ids.nanoindenter in the config file "
             "or built-in fallback"
         ),
     )
