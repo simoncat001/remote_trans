@@ -15,12 +15,8 @@ from typing import Dict, Iterable, List, MutableMapping, Tuple
 from cbf_utils import normalise_key, parse_cbf_header, parse_numeric
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_TEMPLATE = (
-    HERE.parent
-    / "templates"
-    / "SEM"
-    / "高通量扫描电子显微表征元数据规范 -2025 (1).json"
-)
+TEMPLATES_DIR = str(HERE.parent / "templates")
+DEFAULT_TEMPLATE = f"{TEMPLATES_DIR}/SEM/高通量扫描电子显微表征元数据规范 -2025 (1).json"
 
 
 def _convert_voltage(value: str) -> float | None:
