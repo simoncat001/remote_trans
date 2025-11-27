@@ -15,7 +15,8 @@ from typing import Dict, Iterable, List, MutableMapping, Tuple
 from cbf_utils import normalise_key, parse_cbf_header, parse_numeric
 
 HERE = Path(__file__).resolve().parent
-TEMPLATE_DIR = HERE.parent / "templates" / "XRF"
+TEMPLATES_DIR = str(HERE.parent / "templates")
+XRF_TEMPLATES_DIR = f"{TEMPLATES_DIR}/XRF"
 ENERGY_RANGE_RE = re.compile(
     r"(?P<start>[-+]?\d*\.?\d+)(?:\s*(?P<unit>ke?v|me?v|e?v|千e?v|千电子伏|电子伏|mev|kev))?"
     r"\s*(?:-|to|–|—|~|至|→|\s+)\s*(?P<end>[-+]?\d*\.?\d+)"
@@ -237,7 +238,7 @@ def _resolve_template(path: str | Path | None) -> Path:
         if not template_path.is_file():
             raise FileNotFoundError(f"Template '{template_path}' does not exist")
         return template_path
-    candidates = sorted(TEMPLATE_DIR.glob("*.json"))
+    candidates = sorted(Path(XRF_TEMPLATES_DIR).glob("*.json"))
     if not candidates:
         raise FileNotFoundError(
             "No template JSON found under remote_trans/templates/XRF"
