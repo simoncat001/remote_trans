@@ -188,41 +188,55 @@ def multipart_upload(
     if part_size < 5 * 1024 * 1024:
         raise RuntimeError("part_size must be at least 5 MiB")
 
-    session_id, key = _init_upload(session, headers, file_path, content_type, object_prefix, api)
-    print(f"[init] {os.path.basename(file_path)} session={session_id} key={key}")
+    try:
+        session_id, key = _init_upload(
+            session, headers, file_path, content_type, object_prefix, api
+        )
+        print(f"[init] {os.path.basename(file_path)} session={session_id} key={key}")
 
-    plan = _plan_parts(size, part_size)
-    done_map = _list_uploaded(session, headers, session_id, api) if resume else {}
-    to_upload = [pn for pn, _, _ in plan if pn not in done_map]
+        plan = _plan_parts(size, part_size)
+        done_map = _list_uploaded(session, headers, session_id, api) if resume else {}
+        to_upload = [pn for pn, _, _ in plan if pn not in done_map]
 
-    if to_upload:
-        urls = _sign_parts(session, headers, session_id, to_upload, api)
-        results: Dict[int, str] = {}
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            future_map = {
-                executor.submit(_put_part, urls[pn], file_path, offset, chunk_size, pn): pn
-                for pn, offset, chunk_size in plan
-                if pn in to_upload
-            }
-            completed = 0
-            for future in as_completed(future_map):
-                pn = future_map[future]
-                etag = future.result()
-                results[pn] = etag
-                completed += 1
-                if completed % 10 == 0 or completed == len(future_map):
-                    print(f"[upload] {completed}/{len(future_map)} parts")
-        done_map.update(results)
-    else:
-        print("[resume] all parts already uploaded")
+        if to_upload:
+            urls = _sign_parts(session, headers, session_id, to_upload, api)
+            results: Dict[int, str] = {}
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                future_map = {
+                    executor.submit(_put_part, urls[pn], file_path, offset, chunk_size, pn): pn
+                    for pn, offset, chunk_size in plan
+                    if pn in to_upload
+                }
+                completed = 0
+                for future in as_completed(future_map):
+                    pn = future_map[future]
+                    try:
+                        etag = future.result()
+                    except Exception as exc:  # pragma: no cover - surfaced as upload failure
+                        print(
+                            f"[upload_error] part {pn} interrupted: {exc}"
+                        )
+                        raise
+                    results[pn] = etag
+                    completed += 1
+                    if completed % 10 == 0 or completed == len(future_map):
+                        print(f"[upload] {completed}/{len(future_map)} parts")
+            done_map.update(results)
+        else:
+            print("[resume] all parts already uploaded")
 
-    ordered = [(pn, done_map[pn]) for pn, _, _ in plan]
-    resp = _complete_upload(session, headers, session_id, ordered, api)
-    url = resp.get("url")
-    if not url:
-        raise RuntimeError("multipart complete response missing url")
-    print(f"[complete] {os.path.basename(file_path)} -> {url}")
-    return str(url)
+        ordered = [(pn, done_map[pn]) for pn, _, _ in plan]
+        resp = _complete_upload(session, headers, session_id, ordered, api)
+        url = resp.get("url")
+        if not url:
+            raise RuntimeError("multipart complete response missing url")
+        print(f"[complete] {os.path.basename(file_path)} -> {url}")
+        return str(url)
+    except Exception as exc:
+        print(
+            f"[upload_error] {os.path.basename(file_path)} interrupted: {exc}"
+        )
+        raise
 
 
 # ---------------------------------------------------------------------------
