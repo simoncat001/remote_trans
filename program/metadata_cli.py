@@ -132,7 +132,7 @@ EXTRACTORS: Dict[str, Extractor] = {
     ),
     "xrf": Extractor(
         key="xrf",
-        description="High-throughput XRF scans (.cbf)",
+        description="High-throughput XRF scans (.atlas)",
         default_template=_xrf_default_template,
         runner=_xrf_runner,
     ),
@@ -152,17 +152,17 @@ def _detect_type(target: Path) -> Optional[str]:
         suffix = target.suffix.lower()
         if suffix == ".emi":
             return "tem"
-        if suffix == ".cbf":
-            return None
+        if suffix == ".atlas":
+            return "xrf"
         if suffix in {".xrdml", ".xy", ".uxd", ".rd", ".raw", ".gfrm"}:
             return "xrd"
     else:
         emi = next(target.rglob("*.emi"), None)
         if emi is not None:
             return "tem"
-        cbf = next(target.rglob("*.cbf"), None)
-        if cbf is not None:
-            return None
+        atlas = next(target.rglob("*.atlas"), None)
+        if atlas is not None:
+            return "xrf"
         for pattern in ("*.xrdml", "*.xy", "*.uxd", "*.rd", "*.raw", "*.gfrm"):
             xrd_file = next(target.rglob(pattern), None)
             if xrd_file is not None:
