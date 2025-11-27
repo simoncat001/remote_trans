@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -216,22 +217,39 @@ def create_zip(dataset_dir: Path, *, walk_root: Optional[Path] = None) -> Path:
     return zip_path
 
 
+def _with_file_prefix(url: str) -> str:
+    return url if url.startswith("file:") else f"file:{url}"
+
+
 def update_raw_file_section(
     metadata: Dict[str, object],
     config: RawFileConfig,
     zip_url: str,
     listing: List[str],
+    *,
+    listing_url: Optional[str] = None,
 ) -> None:
     container = metadata.get(config.container_key)
     if not isinstance(container, dict):
         container = {}
-    container[config.file_key] = zip_url
+    container[config.file_key] = _with_file_prefix(zip_url)
     if config.listing_key:
-        if config.listing_is_list:
+        if listing_url:
+            container[config.listing_key] = _with_file_prefix(listing_url)
+        elif config.listing_is_list:
             container[config.listing_key] = listing
         else:
             container[config.listing_key] = "\n".join(listing)
     metadata[config.container_key] = container
+
+
+def _write_listing_csv(dataset_dir: Path, listing: List[str]) -> Path:
+    csv_path = dataset_dir / f"{slugify(dataset_dir.name)}_file_listing.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.writer(fp)
+        for entry in listing:
+            writer.writerow([entry])
+    return csv_path
 
 
 def run_metadata(extractor: Extractor, dataset_dir: Path) -> Dict[str, object]:
@@ -282,10 +300,38 @@ def process_directory(dir_path: str, ctx: UploadContext, workflow: InstrumentWor
                 zip_path.unlink()
             except OSError:
                 pass
+    listing_url: Optional[str] = None
+    if workflow.raw_config.listing_key:
+        csv_path = _write_listing_csv(dataset_dir, listing)
+        try:
+            listing_url = multipart_upload(
+                str(csv_path),
+                "text/csv",
+                session=ctx.client.session,
+                headers=ctx.client.auth_headers(),
+                api=ctx.part_upload_url,
+                object_prefix=OBJECT_PREFIX,
+                part_size=PART_SIZE,
+                concurrency=CONCURRENCY,
+            )
+        except Exception as exc:
+            print(f"[ERROR] upload failed for {csv_path}: {exc}")
+        finally:
+            if csv_path.exists():
+                try:
+                    csv_path.unlink()
+                except OSError:
+                    pass
 
-    update_raw_file_section(metadata, workflow.raw_config, zip_url, listing)
+    update_raw_file_section(
+        metadata,
+        workflow.raw_config,
+        zip_url,
+        listing,
+        listing_url=listing_url,
+    )
     print(
-        f"[RAW] {workflow.key}: zip -> {zip_url} with {len(listing)} files listed"
+        f"[RAW] {workflow.key}: zip -> {_with_file_prefix(zip_url)} with {len(listing)} files listed"
     )
 
     payload = {
