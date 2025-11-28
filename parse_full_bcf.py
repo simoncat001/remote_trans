@@ -35,6 +35,11 @@ def _default_json_path(input_path: Path) -> Path:
     return input_path.with_name("metadata.json")
 
 
+def _is_metadata_only(input_path: Path) -> bool:
+    name = input_path.name.lower()
+    return "metadata_only" in name or "metadata-only" in name
+
+
 def _split_file(
     input_path: Path,
     split_dir: Path,
@@ -265,41 +270,51 @@ def run_pipeline(
     input_path = input_path.expanduser().resolve()
     if not input_path.exists():
         raise FileNotFoundError(f"原始BCF文件不存在: {input_path}")
-    if input_path.suffix.lower() != ".bcf":
-        raise ValueError("输入文件必须是.bcf格式")
+    if input_path.suffix.lower() not in {".bcf", ".cbf"}:
+        raise ValueError("输入文件必须是 .bcf 或 .cbf 格式")
     if parts <= 0:
         raise ValueError("--parts 必须为正整数")
 
-    split_dir = (
-        split_dir.expanduser().resolve()
-        if split_dir
-        else _default_split_dir(input_path)
-    )
-    processed_dir = (
-        processed_dir.expanduser().resolve()
-        if processed_dir
-        else _default_processed_dir(input_path)
-    )
-    metadata_only_path = (
-        metadata_only_path.expanduser().resolve()
-        if metadata_only_path
-        else _default_metadata_bcf_path(input_path)
-    )
     json_output_path = (
         output_json.expanduser().resolve()
         if output_json
         else _default_json_path(input_path)
     )
 
-    split_files, created_split = _ensure_split_parts(
-        input_path, split_dir, parts=parts, force=force_split
-    )
-    processed_files, created_processed = _ensure_processed_chunks(
-        split_files, processed_dir, force=force_process
-    )
-    metadata_source, created_metadata = _ensure_metadata_only_from_chunks(
-        processed_files, metadata_only_path, force=force_merge
-    )
+    split_dir_obj: Optional[Path] = None
+    processed_dir_obj: Optional[Path] = None
+    metadata_only_obj: Optional[Path] = None
+
+    if _is_metadata_only(input_path):
+        print("📄 检测到输入文件已是元数据精简版，跳过拆分/精简/合并阶段")
+        metadata_source = input_path
+        created_split = created_processed = created_metadata = False
+    else:
+        split_dir_obj = (
+            split_dir.expanduser().resolve()
+            if split_dir
+            else _default_split_dir(input_path)
+        )
+        processed_dir_obj = (
+            processed_dir.expanduser().resolve()
+            if processed_dir
+            else _default_processed_dir(input_path)
+        )
+        metadata_only_obj = (
+            metadata_only_path.expanduser().resolve()
+            if metadata_only_path
+            else _default_metadata_bcf_path(input_path)
+        )
+
+        split_files, created_split = _ensure_split_parts(
+            input_path, split_dir_obj, parts=parts, force=force_split
+        )
+        processed_files, created_processed = _ensure_processed_chunks(
+            split_files, processed_dir_obj, force=force_process
+        )
+        metadata_source, created_metadata = _ensure_metadata_only_from_chunks(
+            processed_files, metadata_only_obj, force=force_merge
+        )
 
     metadata = _parse_and_dump(metadata_source, json_output_path, pretty=pretty)
 
@@ -313,10 +328,10 @@ def run_pipeline(
     print(f"\n✅ 元数据JSON已生成: {json_output_path}")
 
     if cleanup_intermediate:
-        if created_split and split_dir.exists():
-            shutil.rmtree(split_dir)
-        if created_processed and processed_dir.exists():
-            shutil.rmtree(processed_dir)
+        if created_split and split_dir_obj and split_dir_obj.exists():
+            shutil.rmtree(split_dir_obj)
+        if created_processed and processed_dir_obj and processed_dir_obj.exists():
+            shutil.rmtree(processed_dir_obj)
         if created_metadata and metadata_source.exists():
             metadata_source.unlink()
 
