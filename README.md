@@ -73,3 +73,21 @@
 - `--env` 选择后端环境预设（`dev`/`prod`/`local`），或改用 `--base-url` 指定域名。
 - `--config` 指向包含 `username`/`password` 以及 `template_ids` 的 JSON 配置文件，默认 `config/config.json`。
 - `--process-existing` 启动时先处理已存在的子目录；可按需移除。
+
+## SEM `.bcf` 元数据一键提取
+
+`parse_full_bcf.py` 会把原始 `data/SEM/1.bcf` 拆成 100 份，逐块剥离像素数据、合并得到 `1_metadata_only.bcf`，然后解析为 JSON：
+
+```bash
+python parse_full_bcf.py data/SEM/1.bcf --output data/SEM/metadata.json
+```
+
+- 步骤顺序：① 拆分到 `data/SEM/1_split_parts/` → ② 精简为 `data/SEM/1_processed_parts/` → ③ 合并生成 `data/SEM/1_metadata_only.bcf` → ④ 解析写入 `metadata.json`。
+- 主要参数：
+  - `--parts` 控制拆分份数，默认 100。
+  - `--split-dir`、`--processed-dir`、`--metadata-only` 可重定向各阶段输出。
+  - `--force`（或 `--force-split/--force-process/--force-merge`）可强制重跑对应阶段。
+  - `--cleanup` 会在成功后删除本次新生成的拆分/精简/合并文件。
+  - `--compact` 输出紧凑 JSON，`--no-summary` 跳过终端摘要。
+
+脚本默认复用已存在的拆分结果与精简文件，只在显式 `--force` 时重新构建，避免反复处理大文件。

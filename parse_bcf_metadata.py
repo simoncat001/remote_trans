@@ -7,11 +7,17 @@ BCF文件元数据解析器
 
 import argparse
 import json
+import mmap
 import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+try:
+    import lxml.etree as LET  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    LET = None
 
 
 class BCFParser:
@@ -28,9 +34,17 @@ class BCFParser:
         file_info = self._build_file_info()
         xml_bytes = self._extract_xml_bytes()
         xml_text = self._decode_xml(xml_bytes)
+        xml_text = self._sanitize_xml(xml_text)
 
         print("已定位到嵌入的XML元数据，正在转换为字典...")
-        root = ET.fromstring(xml_text)
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError as exc:
+            if LET is None:
+                raise
+            print(f"⚠️ 标准XML解析失败 ({exc})，改用lxml恢复模式")
+            parser = LET.XMLParser(recover=True)
+            root = LET.fromstring(xml_text.encode("utf-8"), parser=parser)
         xml_dict = self._element_to_dict(root)
 
         self.metadata = {
@@ -50,32 +64,65 @@ class BCFParser:
         }
 
     def _extract_xml_bytes(self) -> bytes:
-        data = self.file_path.read_bytes()
-        start = data.find(b"<?xml")
-        if start == -1:
-            raise ValueError("未在BCF文件中找到XML头部")
+        file_size = self.file_path.stat().st_size
+        if file_size == 0:
+            raise ValueError("文件为空，无法解析")
 
-        root_tag_match = re.search(br"<([A-Za-z0-9:_-]+)[^>]*>", data[start: start + 200])
-        if not root_tag_match:
-            raise ValueError("无法识别XML根元素")
-        root_tag = root_tag_match.group(1)
-        end_tag = b"</" + root_tag + b">"
+        with self.file_path.open("rb") as fh:
+            with mmap.mmap(fh.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
+                start = mm.find(b"<?xml")
+                if start == -1:
+                    raise ValueError("未在BCF文件中找到XML头部")
 
-        end = data.find(end_tag, start)
-        if end == -1:
-            raise ValueError("未找到XML根元素的结束标记")
-        end += len(end_tag)
+                search_slice = mm[start : min(start + 4096, file_size)]
+                root_tag_match = re.search(br"<([A-Za-z0-9:_-]+)[^>]*>", search_slice)
+                if not root_tag_match:
+                    raise ValueError("无法识别XML根元素")
 
-        print(
-            f"发现XML片段，起始于字节{start}，结束于字节{end}，长度约{(end - start)/(1024*1024):.2f} MB"
-        )
-        return data[start:end]
+                root_tag = root_tag_match.group(1)
+                end_tag = b"</" + root_tag + b">"
+
+                search_pos = start
+                while True:
+                    end = mm.find(end_tag, search_pos)
+                    if end == -1:
+                        raise ValueError("未找到XML根元素的结束标记")
+                    end += len(end_tag)
+                    # 直接返回第一个匹配到的根节点闭合段
+                    if mm[start:end].count(end_tag) == 1:
+                        break
+                    search_pos = end
+
+                length_mb = (end - start) / (1024 * 1024)
+                print(
+                    f"发现XML片段，起始于字节{start}，结束于字节{end}，长度约{length_mb:.2f} MB"
+                )
+                return bytes(mm[start:end])
 
     def _decode_xml(self, xml_bytes: bytes) -> str:
         encoding_match = re.search(br"encoding=\"([^\"]+)\"", xml_bytes[:100])
         encoding = encoding_match.group(1).decode("ascii") if encoding_match else "utf-8"
         print(f"使用编码 {encoding} 解码XML元数据")
         return xml_bytes.decode(encoding, errors="replace")
+
+    @staticmethod
+    def _sanitize_xml(xml_text: str) -> str:
+        """移除XML 1.0不支持的控制字符，避免解析失败。"""
+
+        invalid_xml_chars = re.compile(
+            """[
+                \x00-\x08
+                \x0B-\x0C
+                \x0E-\x1F
+                \x7F-\x84
+                \x86-\x9F
+            ]""",
+            re.VERBOSE,
+        )
+        cleaned = invalid_xml_chars.sub("", xml_text)
+        if cleaned != xml_text:
+            print("⚠️ 检测到非法控制字符，已自动清理后再解析")
+        return cleaned
 
     def _element_to_dict(self, element: ET.Element) -> Any:
         children = list(element)

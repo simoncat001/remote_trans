@@ -1,0 +1,26 @@
+{
+  "文件信息": {
+    "文件名": "tmp_metadata_only.bcf",
+    "文件路径": "D:\\Data\\Code\\remote_trans\\data\\SEM\\tmp_metadata_only.bcf",
+    "文件大小(MB)": 24.78,
+    "修改时间": 1764317286.9268796,
+    "创建时间": 1764316083.7495363
+  },
+  "元数据": {
+    "TRTSpectrumDatabase": {
+      "RTHeader": "",
+      "ClassInstanceType": [
+        "",
+        ""
+      ],
+      "Header": {
+        "Date": "15.9.2023",
+        "Time": "8:59:28",
+        "FileVersion": "2"
+      },
+      "DX": "100.045018450184",
+      "DY": "100.045018450184",
+      "Flags": "65280"
+    }
+  }
+}

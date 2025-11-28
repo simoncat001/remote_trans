@@ -7,3 +7,6 @@ xlrd
 hyperspy
 rosettasciio
 numba
+h5py
+lxml
+h5py
